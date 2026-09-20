@@ -2120,7 +2120,8 @@ static void ia64_cpu_class_init(ObjectClass *oc, const void *data)
     icc->implemented_pmd_mask = 0x3ffffULL;
     icc->perf_cycles_mask = 0xf0ULL;
     icc->perf_retired_mask = 0xf0ULL;
-    icc->rse_has_clean_partition = true;
+    /* Intel document 308065-001, table 4-40: the clean count is always zero. */
+    icc->rse_has_clean_partition = false;
     icc->has_native_ia32 = false;
     icc->has_virtualization = true;
     icc->is_montecito = true;
@@ -2374,7 +2375,8 @@ static const IA64CPUModelDef ia64_cpu_model_madison = {
     .implemented_pmd_mask = 0x3ffffULL,
     .perf_cycles_mask = 0xf0ULL,
     .perf_retired_mask = 0xf0ULL,
-    .rse_has_clean_partition = true,
+    /* Intel document 251110-003, table 11-35: clean count is always zero. */
+    .rse_has_clean_partition = false,
     /* Intel order 251110-003, section 12.3. */
     .data_debug_cross_16byte = true,
     .has_native_ia32 = true,
@@ -2432,7 +2434,8 @@ static const IA64CPUModelDef ia64_cpu_model_montecito = {
     .implemented_pmd_mask = 0x3ffffULL,
     .perf_cycles_mask = 0xf0ULL,
     .perf_retired_mask = 0xf0ULL,
-    .rse_has_clean_partition = true,
+    /* Intel document 308065-001, table 4-40: clean count is always zero. */
+    .rse_has_clean_partition = false,
     /* Native IA-32 and PAL-based IA-32 translation are not implemented. */
     .has_native_ia32 = false,
     /* Virtualization mode is not modeled; vmsw raises Virtualization Fault. */
