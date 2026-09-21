@@ -174,13 +174,18 @@ static int cd_read_sector(IDEState *s)
     return 0;
 }
 
+static void ide_atapi_cmd_complete(IDEState *s)
+{
+    ide_transfer_stop(s);
+    ide_bus_set_irq(s->bus);
+}
+
 void ide_atapi_cmd_ok(IDEState *s)
 {
     s->error = 0;
     s->status = READY_STAT | SEEK_STAT;
     s->nsector = (s->nsector & ~7) | ATAPI_INT_REASON_IO | ATAPI_INT_REASON_CD;
-    ide_transfer_stop(s);
-    ide_bus_set_irq(s->bus);
+    ide_atapi_cmd_complete(s);
 }
 
 void ide_atapi_cmd_error(IDEState *s, int sense_key, int asc)
@@ -191,8 +196,7 @@ void ide_atapi_cmd_error(IDEState *s, int sense_key, int asc)
     s->nsector = (s->nsector & ~7) | ATAPI_INT_REASON_IO | ATAPI_INT_REASON_CD;
     s->sense_key = sense_key;
     s->asc = asc;
-    ide_transfer_stop(s);
-    ide_bus_set_irq(s->bus);
+    ide_atapi_cmd_complete(s);
 }
 
 void ide_atapi_io_error(IDEState *s, int ret)
@@ -341,7 +345,7 @@ static void ide_atapi_cmd_check_status(IDEState *s)
     s->error = MC_ERR | (UNIT_ATTENTION << 4);
     s->status = ERR_STAT;
     s->nsector = 0;
-    ide_bus_set_irq(s->bus);
+    ide_atapi_cmd_complete(s);
 }
 /* ATAPI DMA support */
 

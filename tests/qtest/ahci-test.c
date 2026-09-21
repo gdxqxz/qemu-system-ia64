@@ -1714,6 +1714,8 @@ static void test_atapi_tray(void)
     g_assert_cmpuint(asc, ==, ASC_MEDIUM_NOT_PRESENT);
 
     ahci_atapi_test_ready(ahci, port, false, SENSE_UNIT_ATTENTION);
+    /* UNIT ATTENTION remains pending until REQUEST SENSE clears it. */
+    ahci_atapi_test_ready(ahci, port, false, SENSE_UNIT_ATTENTION);
     ahci_atapi_get_sense(ahci, port, &sense, &asc);
     g_assert_cmpuint(sense, ==, SENSE_UNIT_ATTENTION);
     g_assert_cmpuint(asc, ==, ASC_MEDIUM_MAY_HAVE_CHANGED);
