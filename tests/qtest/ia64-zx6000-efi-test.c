@@ -65,7 +65,7 @@ static const uint32_t zx6000_efi_gsi_base[] = {
     IA64_ZX6000_EFI_TEST_ROOT1_GSI_BASE,
 };
 
-G_STATIC_ASSERT(sizeof(IA64PlatformDescriptor) == 1112);
+G_STATIC_ASSERT(sizeof(IA64PlatformDescriptor) == 1376);
 G_STATIC_ASSERT(sizeof(IA64PlatformRamRange) == 16);
 G_STATIC_ASSERT(sizeof(IA64PlatformPciRoot) == 112);
 G_STATIC_ASSERT(sizeof(IA64PlatformIoSapic) == 24);

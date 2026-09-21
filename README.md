@@ -50,6 +50,7 @@ Select a machine explicitly with `-machine`.
 | Machine | Default CPU | Max sockets | Max total cores / threads | Default VGA | Default RAM |
 | --- | --- | ---: | ---: | --- | ---: |
 | `hp-i2000` | `merced-800` | 2 | 2 | NVIDIA Quadro2 Pro | 2 GiB |
+| `hp-zx2000` | `mckinley-900` | 1 | 1 | ATI Radeon RV100 | 1 GiB |
 | `hp-zx6000` | `madison-1500` | 2 | 2 | ATI Radeon RV100 | 2 GiB |
 | `hp-rx2660` | `montecito-9010` | 2 | 9010/9110n: 2 / 2; others: 4 / 8 | ATI RN50 | 8 GiB |
 | `itanium2-vpc` | `montecito-9050` | 64 | 64 | ATI Rage 128 Pro | 2 GiB |

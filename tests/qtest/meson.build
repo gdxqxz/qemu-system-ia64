@@ -152,6 +152,8 @@ qtests_ia64 = ['ia64-vpc-test'] + \
    ['hp-i2000-test'] : []) + \
   (config_all_devices.has_key('CONFIG_HP_RX2660') ? \
    ['hp-rx2660-test'] : []) + \
+  (config_all_devices.has_key('CONFIG_HP_ZX2000') ? \
+   ['hp-zx2000-test'] : []) + \
   (config_all_devices.has_key('CONFIG_HP_ZX6000') ? \
    ['hp-zx6000-test'] : []) + \
   (config_all_devices.has_key('CONFIG_IDE_CMD649') ? \

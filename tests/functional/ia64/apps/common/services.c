@@ -2329,12 +2329,12 @@ static BOOLEAN test_ssdt_legacy_crs(const TEST_TABLE_CONTEXT *Context)
 {
     static const UINT8 sb_name[4] = { '_', 'S', 'B', '_' };
     static const UINT8 pci0_name[4] = { 'P', 'C', 'I', '0' };
-    static const UINT8 uart_name[4] = { 'U', 'A', 'R', '0' };
-    static const UINT8 uart_enabled_name[4] = { 'U', '0', 'E', 'N' };
     static const UINT8 ps2_enabled_name[4] = { 'P', '2', 'E', 'N' };
-    static const UINT8 keyboard_name[4] = { 'P', 'S', '2', 'K' };
-    static const UINT8 mouse_name[4] = { 'P', 'S', '2', 'M' };
+    static const UINT8 sta_name[4] = { '_', 'S', 'T', 'A' };
     static const UINT8 crs_name[4] = { '_', 'C', 'R', 'S' };
+    static const UINT8 ps2_status[] = {
+        0x14, 0x0b, '_', 'S', 'T', 'A', 0, 0xa4, 'P', '2', 'E', 'N',
+    };
     static const UINT8 keyboard_resources[] = {
         0x47, 0x01, 0x60, 0x00, 0x60, 0x00, 0x01, 0x01,
         0x47, 0x01, 0x64, 0x00, 0x64, 0x00, 0x01, 0x01,
@@ -2347,21 +2347,25 @@ static BOOLEAN test_ssdt_legacy_crs(const TEST_TABLE_CONTEXT *Context)
         0x47, 0x01, 0xf8, 0x03, 0xf8, 0x03, 0x01, 0x08,
         0x22, 0x10, 0x00, 0x79, 0x00,
     };
+    static const struct {
+        UINT8 Name[4];
+        const UINT8 *Resources;
+        UINTN ResourceLength;
+    } expected[] = {
+        { { 'U', 'A', 'R', '0' }, uart_resources, sizeof(uart_resources) },
+        { { 'P', 'S', '2', 'K' }, keyboard_resources,
+          sizeof(keyboard_resources) },
+        { { 'P', 'S', '2', 'M' }, mouse_resources, sizeof(mouse_resources) },
+    };
+    const UINT8 *device[sizeof(expected) / sizeof(expected[0])] = { NULL };
+    UINTN device_length[sizeof(expected) / sizeof(expected[0])] = { 0 };
     const UINT8 *aml;
     UINTN aml_length;
-    const UINT8 *keyboard;
-    const UINT8 *mouse;
-    const UINT8 *uart;
-    const UINT8 *keyboard_crs;
-    const UINT8 *mouse_crs;
-    const UINT8 *uart_crs;
     const UINT8 *scope_content;
     const UINT8 *scope_end;
-    UINTN keyboard_crs_length;
-    UINTN mouse_crs_length;
-    UINTN uart_crs_length;
     UINTN scope_offset;
-    BOOLEAN under_pci0 = 0;
+    UINTN index;
+    BOOLEAN ps2_disabled = 0;
 
     if (!Context->Valid) {
         return 0;
@@ -2369,62 +2373,88 @@ static BOOLEAN test_ssdt_legacy_crs(const TEST_TABLE_CONTEXT *Context)
     aml = (const UINT8 *)Context->Ssdt + sizeof(TEST_SDT_HEADER);
     aml_length = get_u32((const UINT8 *)Context->Ssdt + 4) -
                  sizeof(TEST_SDT_HEADER);
-    keyboard = find_bytes(aml, aml_length, keyboard_name,
-                          sizeof(keyboard_name), 0);
-    mouse = find_bytes(aml, aml_length, mouse_name, sizeof(mouse_name), 0);
-    uart = find_bytes(aml, aml_length, uart_name, sizeof(uart_name), 0);
-    if (keyboard == NULL || mouse == NULL || uart == NULL ||
-        find_bytes(aml, aml_length, pci0_name, sizeof(pci0_name), 0) == NULL ||
-        !aml_named_byte(aml, aml_length, uart_enabled_name, 0x0fU) ||
-        !aml_named_byte(aml, aml_length, ps2_enabled_name, 0) ||
-        !aml_named_buffer(aml, aml_length, crs_name,
-                          (UINTN)(uart - aml), &uart_crs,
-                          &uart_crs_length) ||
-        !aml_named_buffer(aml, aml_length, crs_name,
-                          (UINTN)(keyboard - aml), &keyboard_crs,
-                          &keyboard_crs_length) ||
-        !aml_named_buffer(aml, aml_length, crs_name,
-                          (UINTN)(mouse - aml), &mouse_crs,
-                          &mouse_crs_length) ||
-        uart_crs_length != sizeof(uart_resources) ||
-        keyboard_crs_length != sizeof(keyboard_resources) ||
-        mouse_crs_length != sizeof(mouse_resources) ||
-        !ia64_bytes_equal(uart_crs, uart_resources,
-                          sizeof(uart_resources)) ||
-        !ia64_bytes_equal(keyboard_crs, keyboard_resources,
-                          sizeof(keyboard_resources)) ||
-        !ia64_bytes_equal(mouse_crs, mouse_resources,
-                          sizeof(mouse_resources))) {
-        return 0;
-    }
     for (scope_offset = 0; scope_offset + 2U < aml_length;
          scope_offset++) {
+        const UINT8 *position;
+
         if (aml[scope_offset] != 0x10U ||
             !aml_package(aml + scope_offset + 1U, aml + aml_length,
                          &scope_content, &scope_end)) {
             continue;
         }
-        if (scope_content + 10U <= scope_end &&
-            scope_content[0] == 0x5cU &&
-            scope_content[1] == 0x2eU &&
-            ia64_bytes_equal(scope_content + 2U,
-                             sb_name, sizeof(sb_name)) &&
-            ia64_bytes_equal(scope_content + 6U,
-                             pci0_name, sizeof(pci0_name)) &&
-            find_bytes(scope_content + 10U,
-                       (UINTN)(scope_end - scope_content - 10U),
-                       uart_name, sizeof(uart_name), 0) != NULL &&
-            find_bytes(scope_content + 10U,
-                       (UINTN)(scope_end - scope_content - 10U),
-                       keyboard_name, sizeof(keyboard_name), 0) != NULL &&
-            find_bytes(scope_content + 10U,
-                       (UINTN)(scope_end - scope_content - 10U),
-                       mouse_name, sizeof(mouse_name), 0) != NULL) {
-            under_pci0 = 1;
-            break;
+        if ((UINTN)(scope_end - scope_content) < 10U ||
+            scope_content[0] != 0x5cU ||
+            scope_content[1] != 0x2eU ||
+            !ia64_bytes_equal(scope_content + 2U,
+                              sb_name, sizeof(sb_name)) ||
+            !ia64_bytes_equal(scope_content + 6U,
+                              pci0_name, sizeof(pci0_name))) {
+            continue;
+        }
+        position = scope_content + 10U;
+        while (position < scope_end) {
+            const UINT8 *content;
+            const UINT8 *end;
+
+            if (*position == 0x08U &&
+                (UINTN)(scope_end - position) >= 6U) {
+                const UINT8 *name = position + 1U;
+                UINT64 value;
+
+                position += 5U;
+                if (!aml_integer(&position, scope_end, &value)) {
+                    return 0;
+                }
+                if (ia64_bytes_equal(name, ps2_enabled_name, 4)) {
+                    if (ps2_disabled || value != 0) {
+                        return 0;
+                    }
+                    ps2_disabled = 1;
+                }
+                continue;
+            }
+            if ((UINTN)(scope_end - position) < 3U ||
+                position[0] != 0x5bU || position[1] != 0x82U ||
+                !aml_package(position + 2U, scope_end, &content, &end) ||
+                (UINTN)(end - content) < 4U) {
+                return 0;
+            }
+            for (index = 0; index < sizeof(expected) / sizeof(expected[0]);
+                 index++) {
+                if (ia64_bytes_equal(content, expected[index].Name, 4)) {
+                    if (device[index] != NULL) {
+                        return 0;
+                    }
+                    device[index] = content + 4U;
+                    device_length[index] = (UINTN)(end - content - 4U);
+                }
+            }
+            position = end;
         }
     }
-    return under_pci0;
+    if (!ps2_disabled) {
+        return 0;
+    }
+    for (index = 0; index < sizeof(expected) / sizeof(expected[0]); index++) {
+        const UINT8 *crs;
+        UINTN crs_length;
+
+        if (device[index] == NULL ||
+            !aml_named_buffer(device[index], device_length[index], crs_name,
+                              0, &crs, &crs_length) ||
+            crs_length != expected[index].ResourceLength ||
+            !ia64_bytes_equal(crs, expected[index].Resources, crs_length)) {
+            return 0;
+        }
+        if (index == 0 ?
+            !aml_named_byte(device[index], device_length[index],
+                            sta_name, 0x0fU) :
+            find_bytes(device[index], device_length[index], ps2_status,
+                       sizeof(ps2_status), 0) == NULL) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static BOOLEAN test_dsdt_prt(const TEST_TABLE_CONTEXT *Context)

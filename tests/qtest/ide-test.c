@@ -1100,11 +1100,12 @@ static void cdrom_send_cdb(QPCIDevice *dev, QPCIBar ide_bar,
     }
 }
 
-static void test_cdrom_dma_error(void)
+static void test_cdrom_dma_error(gconstpointer opaque)
 {
     static const uint8_t ready_cdb[12] = {
         TEST_UNIT_READY,
     };
+    bool dma_active = GPOINTER_TO_UINT(opaque);
     QTestState *qts;
     QPCIDevice *dev;
     QPCIBar bmdma_bar, ide_bar;
@@ -1139,6 +1140,12 @@ static void test_cdrom_dma_error(void)
 
     ide_wait_intr(qts, IDE_PRIMARY_IRQ);
     assert_bit_set(qpci_io_readb(dev, bmdma_bar, bmreg_status), BM_STS_INTR);
+    if (dma_active) {
+        qpci_io_writeb(dev, bmdma_bar, bmreg_cmd,
+                       BM_CMD_START | BM_CMD_WRITE);
+        assert_bit_set(qpci_io_readb(dev, bmdma_bar, bmreg_status),
+                       BM_STS_INTR | BM_STS_ACTIVE);
+    }
 
     migration_path = g_strdup_printf("%s.migration", tmp_path[1]);
     migration_uri = g_strdup_printf("file:%s", migration_path);
@@ -1159,6 +1166,11 @@ static void test_cdrom_dma_error(void)
     ide_wait_migration(qts);
     dev = get_pci_device(qts, &bmdma_bar, &ide_bar);
 
+    if (dma_active) {
+        assert_bit_set(qpci_io_readb(dev, bmdma_bar, bmreg_status),
+                       BM_STS_INTR | BM_STS_ACTIVE);
+        qpci_io_writeb(dev, bmdma_bar, bmreg_cmd, 0);
+    }
     /* Acknowledge the command interrupt before starting DMA. */
     qpci_io_writeb(dev, bmdma_bar, bmreg_status,
                    BM_STS_ERROR | BM_STS_INTR);
@@ -1177,6 +1189,8 @@ static void test_cdrom_dma_error(void)
     assert_bit_clear(status, BSY | DRQ);
 
     qpci_io_writeb(dev, bmdma_bar, bmreg_cmd, BM_CMD_WRITE);
+    assert_bit_clear(qpci_io_readb(dev, bmdma_bar, bmreg_status),
+                     BM_STS_ACTIVE);
     qpci_io_writeb(dev, bmdma_bar, bmreg_status,
                    BM_STS_ERROR | BM_STS_INTR);
     cdrom_dma_packet_start(qts, dev, ide_bar);
@@ -1231,6 +1245,8 @@ static void test_cdrom_dma_error(void)
     assert_bit_clear(status, BSY | DRQ | ERR | DF);
 
     qpci_io_writeb(dev, bmdma_bar, bmreg_cmd, BM_CMD_WRITE);
+    assert_bit_clear(qpci_io_readb(dev, bmdma_bar, bmreg_status),
+                     BM_STS_ACTIVE);
     qtest_qmp_assert_success(
         qts, "{'execute':'blockdev-open-tray','arguments':{'id':'cd0'}}");
     qtest_qmp_assert_success(
@@ -1240,13 +1256,20 @@ static void test_cdrom_dma_error(void)
         qpci_io_writeb(dev, bmdma_bar, bmreg_status,
                        BM_STS_ERROR | BM_STS_INTR);
         cdrom_dma_packet_start(qts, dev, ide_bar);
-        qpci_io_writeb(dev, bmdma_bar, bmreg_cmd,
-                       BM_CMD_START | BM_CMD_WRITE);
+        if (dma_active) {
+            qpci_io_writeb(dev, bmdma_bar, bmreg_cmd,
+                           BM_CMD_START | BM_CMD_WRITE);
+        }
         send_scsi_cdb_read10(dev, ide_bar, 0, 1);
 
         ide_wait_intr(qts, IDE_PRIMARY_IRQ);
         status = qpci_io_readb(dev, bmdma_bar, bmreg_status);
-        assert_bit_set(status, BM_STS_INTR | BM_STS_ACTIVE);
+        assert_bit_set(status, BM_STS_INTR);
+        if (dma_active) {
+            assert_bit_set(status, BM_STS_ACTIVE);
+        } else {
+            assert_bit_clear(status, BM_STS_ACTIVE);
+        }
         assert_bit_clear(status, BM_STS_ERROR);
         status = qpci_io_readb(dev, ide_bar, reg_status);
         assert_bit_set(status, ERR);
@@ -1408,6 +1431,89 @@ static void test_cdrom_dma_device_switch(gconstpointer opaque)
     ide_test_quit(qts);
 }
 
+static void test_cdrom_dma_short(void)
+{
+    static const uint8_t cdb[12] = { 0x12, 0, 0, 0, 36, 0 };
+    static const struct {
+        uint32_t first_size;
+        uint32_t second_size;
+        bool active;
+    } cases[] = {
+        { 36 | PRDT_EOT, 0, false },
+        { 72 | PRDT_EOT, 0, true },
+        { 36, 36 | PRDT_EOT, true },
+        { 18, 18 | PRDT_EOT, false },
+    };
+    QTestState *qts = ide_test_start(
+        "-drive if=none,file=%s,media=cdrom,format=raw,id=sr0 "
+        "-device ide-cd,drive=sr0,bus=ide.0", tmp_path[0]);
+    QPCIBar bmdma_bar, ide_bar;
+    QPCIDevice *dev = get_pci_device(qts, &bmdma_bar, &ide_bar);
+    uintptr_t guest_buf = guest_alloc(&guest_malloc, 72);
+    uintptr_t guest_prdt = guest_alloc(&guest_malloc, 2 * sizeof(PrdtEntry));
+    size_t i;
+
+    qtest_irq_intercept_in(qts, "ioapic");
+    qpci_io_writeb(dev, ide_bar, reg_device, 0);
+    for (i = 0; i < G_N_ELEMENTS(cases); i++) {
+        PrdtEntry prdt[2] = {
+            { cpu_to_le32(guest_buf), cpu_to_le32(cases[i].first_size) },
+            { cpu_to_le32(guest_buf + (cases[i].first_size & 0xffff)),
+              cpu_to_le32(cases[i].second_size) },
+        };
+        uint8_t data[72];
+        uint8_t status;
+        uint8_t expected_status = BM_STS_INTR;
+        size_t j;
+
+        if (cases[i].active) {
+            expected_status |= BM_STS_ACTIVE;
+        }
+        qtest_memset(qts, guest_buf, 0xa5, sizeof(data));
+        qtest_memwrite(qts, guest_prdt, prdt, sizeof(prdt));
+        qpci_io_writel(dev, bmdma_bar, bmreg_prdt, guest_prdt);
+        qpci_io_writeb(dev, bmdma_bar, bmreg_status,
+                       BM_STS_INTR | BM_STS_ERROR);
+        cdrom_dma_packet_start(qts, dev, ide_bar);
+        cdrom_send_cdb(dev, ide_bar, cdb, sizeof(cdb));
+        qpci_io_writeb(dev, bmdma_bar, bmreg_cmd,
+                       BM_CMD_START | BM_CMD_WRITE);
+        ide_wait_intr(qts, IDE_PRIMARY_IRQ);
+        status = qpci_io_readb(dev, bmdma_bar, bmreg_status);
+        g_assert_cmphex(status & (BM_STS_INTR | BM_STS_ERROR | BM_STS_ACTIVE),
+                        ==, expected_status);
+        status = qpci_io_readb(dev, ide_bar, reg_status);
+        assert_bit_clear(status, BSY | DRQ | ERR | DF);
+        qtest_memread(qts, guest_buf, data, sizeof(data));
+        g_assert_cmphex(data[0] & 0x1f, ==, 5);
+        for (j = 36; j < sizeof(data); j++) {
+            g_assert_cmphex(data[j], ==, 0xa5);
+        }
+        if (!cases[i].active) {
+            /* EOT requires a new START edge before another command can DMA. */
+            qpci_io_writeb(dev, bmdma_bar, bmreg_status, BM_STS_INTR);
+            cdrom_dma_packet_start(qts, dev, ide_bar);
+            cdrom_send_cdb(dev, ide_bar, cdb, sizeof(cdb));
+            qpci_io_writeb(dev, bmdma_bar, bmreg_cmd,
+                           BM_CMD_START | BM_CMD_WRITE);
+            assert_bit_clear(qpci_io_readb(dev, bmdma_bar, bmreg_status),
+                             BM_STS_ACTIVE | BM_STS_INTR);
+            g_assert_false(qtest_get_irq(qts, IDE_PRIMARY_IRQ));
+            qpci_io_writeb(dev, bmdma_bar, bmreg_cmd, 0);
+            qpci_io_writeb(dev, bmdma_bar, bmreg_cmd,
+                           BM_CMD_START | BM_CMD_WRITE);
+            ide_wait_intr(qts, IDE_PRIMARY_IRQ);
+            assert_bit_clear(qpci_io_readb(dev, ide_bar, reg_status),
+                             BSY | DRQ | ERR | DF);
+        }
+        qpci_io_writeb(dev, bmdma_bar, bmreg_cmd, 0);
+        assert_bit_clear(qpci_io_readb(dev, bmdma_bar, bmreg_status),
+                         BM_STS_ACTIVE);
+    }
+    free_pci_device(dev);
+    ide_test_quit(qts);
+}
+
 static void test_cdrom_dma(void)
 {
     QTestState *qts;
@@ -1502,12 +1608,16 @@ int main(int argc, char **argv)
 
     qtest_add_func("/ide/cdrom/pio", test_cdrom_pio);
     qtest_add_func("/ide/cdrom/pio_large", test_cdrom_pio_large);
-    qtest_add_func("/ide/cdrom/dma_error", test_cdrom_dma_error);
+    qtest_add_data_func("/ide/cdrom/dma_error",
+                       GUINT_TO_POINTER(0), test_cdrom_dma_error);
+    qtest_add_data_func("/ide/cdrom/dma_error_active",
+                       GUINT_TO_POINTER(1), test_cdrom_dma_error);
     qtest_add_func("/ide/cdrom/dma_restart", test_cdrom_dma_restart);
     qtest_add_data_func("/ide/cdrom/dma_device_switch/master_to_slave",
                         GUINT_TO_POINTER(0), test_cdrom_dma_device_switch);
     qtest_add_data_func("/ide/cdrom/dma_device_switch/slave_to_master",
                         GUINT_TO_POINTER(1), test_cdrom_dma_device_switch);
+    qtest_add_func("/ide/cdrom/dma_short", test_cdrom_dma_short);
     qtest_add_func("/ide/cdrom/dma", test_cdrom_dma);
 
     ret = g_test_run();

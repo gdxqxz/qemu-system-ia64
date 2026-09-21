@@ -17,18 +17,19 @@ The machine models are grouped by processor generation:
   model.  ``itanium-vpc`` uses PS/2 input.  ``hp-i2000`` retains its PS/2
   controller and defaults to a USB keyboard and tablet.
 
-``itanium2-vpc`` and ``hp-zx6000`` (Itanium 2 generation)
-  ``itanium2-vpc`` defaults to the ``montecito-9050`` CPU model.  ``hp-zx6000``
-  emulates the HP zx1-based workstation and requires ``madison-1500``.
-  Both default to a USB keyboard and tablet.
+``itanium2-vpc``, ``hp-zx2000`` and ``hp-zx6000`` (Itanium 2 generation)
+  ``itanium2-vpc`` defaults to the ``montecito-9050`` CPU model.
+  ``hp-zx2000`` defaults to ``mckinley-900``; ``hp-zx6000`` requires
+  ``madison-1500``.  Both workstations use the HP zx1 chipset.
+  All three default to a USB keyboard and tablet.
 
 ``hp-rx2660`` (Montecito generation)
   Provides an HP Integrity rx2660 server model.  It defaults to the
   ``montecito-9010`` CPU model, 8 GiB of RAM, and a USB keyboard and tablet.
 
 ``ia64-vpc`` aliases ``itanium2-vpc``.  The virtual PC models support 64 CPUs,
-``hp-i2000`` and ``hp-zx6000`` two, and ``hp-rx2660`` eight.  Use
-``-accel tcg,thread=multi`` for more than one CPU.
+``hp-zx2000`` one, ``hp-i2000`` and ``hp-zx6000`` two, and ``hp-rx2660``
+eight.  Use ``-accel tcg,thread=multi`` for more than one CPU.
 
 ``-machine ...,usb1=on`` limits USB ports to low/full speed (1.5/12 Mb/s),
 including ports on hubs and hotplugged controllers.  Both the port and the
@@ -101,6 +102,28 @@ per-command autosense suppression, initiator IDs, queue depth and execution
 throttle settings are supported.  Queued requests and deadlines migrate.
 The 82559 Flash aperture contains no Flash storage.
 ``-vga ati`` places an ATI adapter at ``03:00.0``.
+
+HP zx2000 device layout
+-----------------------
+
+The zx2000 accepts ``mckinley-900`` (default) and ``madison-1400-1.5m``
+with one CPU.  RAM ranges from 512 MiB to 8 GiB, with a 1 GiB default.
+The model maps up to 1 GiB below the PCI aperture and the remainder at 4 GiB.
+
+Its four zx1 roots start at buses 00, 80, a0, and c0 on ropes 0, 4, 5,
+and 6.  Fixed devices are Radeon RV100 at ``00:00.0``, NEC USB at
+``a0:01.0`` through ``a0:01.2``, CMD649 IDE at ``a0:02.0``, and Intel
+82540EM Ethernet at ``a0:03.0``.  The default NIC model is ``e1000``.
+The NEC model exposes five EHCI ports and two OHCI companions.
+
+Disks and CD-ROMs default to IDE, with four devices across two channels.
+The provided EFI firmware detects only the primary channel; attach boot
+media using ``index=0`` or ``index=1``.
+
+The model provides NVRAM, RTC and ACPI support with the provided EFI
+firmware.  Its two PDH 16550 UARTs are at
+``0xff5e0000`` and ``0xff5e2000``.  FM801 audio, its gameport and BMC
+services are not emulated.  No onboard SCSI controller is instantiated.
 
 HP zx6000 device layout
 -----------------------
@@ -254,9 +277,10 @@ A typical invocation is::
 
 On ``hp-i2000`` and ``hp-zx6000``, disks without an explicit interface use
 SCSI and CD-ROMs use IDE; an explicit ``if=scsi`` or ``if=ide`` takes
-precedence.  On ``hp-rx2660``, both default to SCSI and no IDE controller is
-present.  On both virtual PC models, drives without an explicit interface use
-the LSI53C895A SCSI controller.  ``itanium2-vpc`` also provides AHCI; attach
+precedence.  On ``hp-zx2000``, both default to IDE.  On ``hp-rx2660``, both
+default to SCSI and no IDE controller is present.  On both virtual PC models,
+drives without an explicit interface use the LSI53C895A SCSI controller.
+``itanium2-vpc`` also provides AHCI; attach
 AHCI media with ``if=none`` and an explicit ``ide-hd`` or ``ide-cd`` device.
 
 Windows host clock resolution
