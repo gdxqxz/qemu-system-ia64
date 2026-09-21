@@ -364,6 +364,13 @@ static bool hp_zx6000_pdh_load_nvram(HPZX6000PDHState *s, Error **errp)
     return true;
 }
 
+static void hp_zx6000_pdh_uart_irq(void *opaque, int n, int level)
+{
+    HPZX6000PDHState *s = opaque;
+
+    qemu_set_irq(s->uart_irq[n], level);
+}
+
 static void hp_zx6000_pdh_realize(DeviceState *dev, Error **errp)
 {
     HPZX6000PDHState *s = HP_ZX6000_PDH(dev);
@@ -383,7 +390,8 @@ static void hp_zx6000_pdh_realize(DeviceState *dev, Error **errp)
         if (!sysbus_realize(SYS_BUS_DEVICE(uart), errp)) {
             return;
         }
-        sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0, s->uart_irq[i]);
+        sysbus_connect_irq(SYS_BUS_DEVICE(uart), 0,
+                           qdev_get_gpio_in_named(dev, "uart-irq", i));
         sysbus_init_mmio(sbd,
                          sysbus_mmio_get_region(SYS_BUS_DEVICE(uart), 0));
     }
@@ -446,6 +454,8 @@ static void hp_zx6000_pdh_init(Object *obj)
     SysBusDevice *sbd = SYS_BUS_DEVICE(obj);
     unsigned int i;
 
+    qdev_init_gpio_in_named(DEVICE(obj), hp_zx6000_pdh_uart_irq,
+                            "uart-irq", HP_ZX6000_PDH_UART_COUNT);
     for (i = 0; i < HP_ZX6000_PDH_UART_COUNT; i++) {
         g_autofree char *name = g_strdup_printf("uart[%u]", i);
         g_autofree char *property = g_strdup_printf("chardev%u", i);

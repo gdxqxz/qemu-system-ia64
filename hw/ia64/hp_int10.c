@@ -58,8 +58,6 @@
 #define HP_INT10_ROM_NVIDIA_BMP       0x0600U
 #define HP_INT10_VECTOR_ADDR          (0x10U * 4U)
 
-#define HP_INT10_IO_BASE              0x000001e0U
-#define HP_INT10_IO_SIZE              0x00000010U
 #define HP_INT10_TRIGGER              0x4941U
 
 #define HP_INT10_VBE2_SIGNATURE       0x32454256U
@@ -214,7 +212,7 @@ static const char hp_int10_revision[] = "1.0";
 /*
  * 16-bit INT 10h entry.  AX/BX/CX/DX/DI/ES are marshalled through ports
  * 1e0h..1ebh; 4941h written to 1ech executes the request.  Response words
- * are returned through 1eeh.  Keep this in sync with HP_INT10_IO_BASE.
+ * are returned through 1eeh.  Keep this in sync with HP_IA64_INT10_IO_BASE.
  */
 static const uint8_t hp_int10_handler[] = {
     0x55, 0x89, 0xe5, 0x50, 0x52, 0xba, 0xe0, 0x01,
@@ -1666,9 +1664,9 @@ bool hp_ia64_int10_init(HPIA64Int10 *s,
 
     memory_region_init_io(&s->service_io, config->owner,
                           &hp_int10_io_ops, s,
-                          config->region_name, HP_INT10_IO_SIZE);
+                          config->region_name, HP_IA64_INT10_IO_SIZE);
     s->service_parent = config->service_io;
-    memory_region_add_subregion(s->service_parent, HP_INT10_IO_BASE,
+    memory_region_add_subregion(s->service_parent, HP_IA64_INT10_IO_BASE,
                                 &s->service_io);
     s->initialized = true;
     hp_ia64_int10_reset(s);

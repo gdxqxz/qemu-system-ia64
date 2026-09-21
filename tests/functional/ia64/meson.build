@@ -95,6 +95,8 @@ tests_ia64_system_quick = [
      ['zx6000_efi'] : []) + \
     (config_all_devices.has_key('CONFIG_HP_I2000') ?
      ['hp_i2000'] : []) + \
+    (config_all_devices.has_key('CONFIG_HP_ZX2000') ?
+     ['hp_zx2000'] : []) + \
     (config_all_devices.has_key('CONFIG_HP_ZX6000') ?
      ['hp_zx6000'] : []) + \
     (config_all_devices.has_key('CONFIG_HP_RX2660') ?
@@ -117,6 +119,7 @@ test_ia64_timeouts = {
   'ras': 120,
   'zx6000_efi': 90,
   'hp_i2000': 120,
+  'hp_zx2000': 120,
   'hp_zx6000': 120,
   'hp_rx2660': 120,
   'storage': 300,

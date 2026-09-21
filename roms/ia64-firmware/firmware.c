@@ -29,6 +29,7 @@
 #include "fw-usb.h"
 #include "dsdt-i2000.h"
 #include "ssdt-platform-devices.h"
+#include "ssdt-vpc-uart.h"
 
 #define IA64_PSR_AC     (1ULL << 3)
 #define IA64_PSR_DT     (1ULL << 17)
@@ -1176,7 +1177,7 @@ typedef struct {
 
 typedef struct {
     ACPI_SDT_HEADER Hdr;
-    UINT8 Aml[IA64_SSDT_AML_SIZE];
+    UINT8 Aml[IA64_SSDT_AML_SIZE + FW_ACPI_UART_SSDT_AML_CAPACITY];
 } __attribute__((packed)) ACPI_SSDT;
 
 typedef struct {
@@ -1906,8 +1907,11 @@ FW_STATIC_ASSERT(IA64_I2000_DSDT_AML_SIZE <=
                  FW_ACPI_ZX6000_DSDT_AML_CAPACITY,
                  i2000_dsdt_fits_storage);
 FW_STATIC_ASSERT(sizeof(ACPI_SSDT) ==
-                 sizeof(ACPI_SDT_HEADER) + IA64_SSDT_AML_SIZE,
+                 sizeof(ACPI_SDT_HEADER) + IA64_SSDT_AML_SIZE +
+                 FW_ACPI_UART_SSDT_AML_CAPACITY,
                  acpi_ssdt_size);
+FW_STATIC_ASSERT(IA64_VPC_UART_AML_SIZE <= FW_ACPI_UART_SSDT_AML_CAPACITY,
+                 vpc_uart_ssdt_fits_storage);
 FW_STATIC_ASSERT(sizeof(ACPI_MCFG_ALLOCATION) == 16,
                  acpi_mcfg_allocation_size);
 FW_STATIC_ASSERT(sizeof(ACPI_MCFG) == 44U +
@@ -2334,7 +2338,7 @@ FW_STATIC_ASSERT(__builtin_offsetof(IA64VpcHandoff, ThreadsPerCore) == 96,
                  fw_handoff_threads_per_core_offset);
 FW_STATIC_ASSERT(sizeof(IA64VpcCompatHandoff) == 32,
                  fw_compat_handoff_size);
-FW_STATIC_ASSERT(sizeof(IA64PlatformDescriptor) == 1112,
+FW_STATIC_ASSERT(sizeof(IA64PlatformDescriptor) == 1376,
                  fw_platform_descriptor_size);
 FW_STATIC_ASSERT(sizeof(IA64PlatformRamRange) == 16,
                  fw_platform_ram_range_size);
@@ -3314,6 +3318,76 @@ static BOOLEAN fw_platform_i2000_profile_valid(
             ISP12160_QEMU_I2000_GSI);
 }
 
+static BOOLEAN fw_platform_uarts_valid(
+    const IA64PlatformDescriptor *Descriptor)
+{
+    UINTN i;
+    UINTN j;
+
+    if (Descriptor->UartCount > IA64_PLATFORM_MAX_UARTS ||
+        Descriptor->Reserved5 != 0 ||
+        (Descriptor->UartCount != 0 &&
+         (Descriptor->PciRootIdentity !=
+              IA64_PLATFORM_PCI_ROOT_IDENTITY_HP_ZX ||
+          Descriptor->Uart[0].Base != Descriptor->ConsoleBase ||
+          Descriptor->Uart[0].Gsi != Descriptor->ConsoleIrq ||
+          Descriptor->ConsoleRegisterStride != 1 ||
+          Descriptor->ConsoleClockHz != IA64_PLATFORM_UART_CLOCK_HZ))) {
+        return 0;
+    }
+    for (i = 0; i < Descriptor->UartCount; i++) {
+        const IA64PlatformUart *uart = &Descriptor->Uart[i];
+        UINT64 size = IA64_PLATFORM_RESOURCE_ALIGNMENT;
+
+        if (uart->Base == 0 || (uart->Base & (size - 1U)) != 0 ||
+            !fw_platform_u64_range_valid(uart->Base, size) ||
+            uart->Base + size >
+                ((UINT64)1 << Descriptor->PhysicalAddressBits) ||
+            uart->RootIndex >= Descriptor->PciRootCount ||
+            !fw_platform_gsi_present(Descriptor, uart->Gsi) ||
+            fw_platform_range_overlaps_ram(Descriptor, uart->Base, size) ||
+            fw_platform_range_overlaps_io_sapic(Descriptor, uart->Base, size) ||
+            fw_platform_u64_ranges_overlap(
+                uart->Base, size, Descriptor->LegacyIoBase,
+                Descriptor->LegacyIoSize) ||
+            fw_platform_u64_ranges_overlap(
+                uart->Base, size, IA64_PLATFORM_ZX1_SBA_CSR_BASE,
+                IA64_PLATFORM_ZX1_SBA_CSR_SIZE) ||
+            (i != 0 && fw_platform_range_overlaps_fixed(
+                Descriptor, uart->Base, size, NULL))) {
+            return 0;
+        }
+        for (j = 0; j < Descriptor->PciRootCount; j++) {
+            const IA64PlatformPciRoot *root =
+                fw_platform_source_pci_root(Descriptor, j);
+            UINT64 config_size = ia64_platform_pci_config_size(
+                root->ConfigType, root->Bus, root->BusEnd);
+            UINT64 config_base = root->ConfigBase +
+                ia64_platform_pci_config_offset(root->ConfigType, root->Bus);
+
+            if (fw_platform_u64_ranges_overlap(
+                    uart->Base, size, config_base, config_size) ||
+                fw_platform_u64_ranges_overlap(
+                    uart->Base, size,
+                    root->Mmio32Base + root->Mmio32TranslationOffset,
+                    root->Mmio32Size) ||
+                fw_platform_u64_ranges_overlap(
+                    uart->Base, size,
+                    root->Mmio64Base + root->Mmio64TranslationOffset,
+                    root->Mmio64Size)) {
+                return 0;
+            }
+        }
+        for (j = 0; j < i; j++) {
+            if (uart->Base == Descriptor->Uart[j].Base ||
+                uart->Gsi == Descriptor->Uart[j].Gsi) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 static BOOLEAN fw_platform_entries_valid(
     const IA64PlatformDescriptor *Descriptor)
 {
@@ -3782,6 +3856,7 @@ BOOLEAN fw_platform_descriptor_init(UINT64 DescriptorGpa,
         return 0;
     }
     if (!fw_platform_entries_valid(source) ||
+        !fw_platform_uarts_valid(source) ||
         !fw_platform_descriptor_in_ram(
             source, DescriptorGpa, DescriptorSize)) {
         return 0;
@@ -3873,6 +3948,12 @@ static BOOLEAN fw_hp_zx_profile_enabled(VOID)
     return mPlatformProfile.Present &&
         mPlatformProfile.Descriptor.PciRootIdentity ==
             IA64_PLATFORM_PCI_ROOT_IDENTITY_HP_ZX;
+}
+
+static BOOLEAN fw_hp_zx2000_profile_enabled(VOID)
+{
+    return mPlatformProfile.Present &&
+        mPlatformProfile.Descriptor.PlatformId == IA64_PLATFORM_ID_HP_ZX2000;
 }
 
 static const IA64PlatformOnboardDevice *fw_platform_onboard_device(
@@ -6468,6 +6549,8 @@ static const CHAR8 *acpi_oem_id(void)
 static void init_sdt_header(ACPI_SDT_HEADER *hdr, UINT32 sig, UINT32 len)
 {
     const CHAR8 *oem_id = acpi_oem_id();
+    const CHAR8 *table_id = fw_hp_zx2000_profile_enabled() ?
+        "zx2000  " : "IA64VMSR";
     UINTN i;
     hdr->Signature = sig;
     hdr->Length = len;
@@ -6477,7 +6560,7 @@ static void init_sdt_header(ACPI_SDT_HEADER *hdr, UINT32 sig, UINT32 len)
         hdr->OemId[i] = oem_id[i];
     }
     for (i = 0; i < 8; i++) {
-        hdr->OemTableId[i] = "IA64VMSR"[i];
+        hdr->OemTableId[i] = table_id[i];
     }
     hdr->OemRevision = 1;
     hdr->CreatorId = EFI_SIGNATURE_32('Q', 'E', 'M', 'U');
@@ -14581,6 +14664,37 @@ static BOOLEAN fw_range_in_firmware_address_space(UINT64 Start, UINT64 Size)
            Size <= FW_FIRMWARE_ADDRESS_SPACE_END - Start;
 }
 
+static void efi_add_zx_firmware_ranges(UINTN *Index)
+{
+    const IA64PlatformDescriptor *descriptor = &mPlatformProfile.Descriptor;
+    UINT64 cursor = FW_FIRMWARE_ADDRESS_SPACE_BASE;
+
+    while (cursor < FW_FIRMWARE_ADDRESS_SPACE_END) {
+        UINT64 next = FW_FIRMWARE_ADDRESS_SPACE_END;
+        UINT64 size = 0;
+        UINTN i;
+
+        for (i = 0; i <= descriptor->UartCount; i++) {
+            UINT64 base = i == descriptor->UartCount ?
+                descriptor->AcpiPmBase : descriptor->Uart[i].Base;
+            UINT64 candidate_size = i == descriptor->UartCount ?
+                descriptor->AcpiPmSize : IA64_PLATFORM_RESOURCE_ALIGNMENT;
+
+            if (base >= cursor && base < next &&
+                fw_range_in_firmware_address_space(base, candidate_size)) {
+                next = base;
+                size = candidate_size;
+            }
+        }
+        efi_add_memory_range(Index, EfiRuntimeServicesData, cursor, next,
+                             efi_memory_attribute(EfiRuntimeServicesData,
+                                                  EFI_MEMORY_UC));
+        efi_add_memory_range(Index, EfiMemoryMappedIO, next, next + size,
+                             EFI_MEMORY_UC | EFI_MEMORY_RUNTIME);
+        cursor = next + size;
+    }
+}
+
 static BOOLEAN efi_init_memory_map(void)
 {
     UINTN firmware_end = ((UINTN)&_end + 0x1FFFU) & ~0x1FFFULL;
@@ -14771,29 +14885,13 @@ static BOOLEAN efi_init_memory_map(void)
 
     /*
      * Publish the SAL firmware address space as runtime data.  For HP zx
-     * platform profiles, keep the fixed ACPI register page typed as MMIO and
-     * split the surrounding aperture to avoid overlapping EFI descriptors.
+     * profiles, keep the ACPI and UART register pages typed as MMIO.  Split
+     * the surrounding aperture to avoid overlapping EFI descriptors.
      */
     if (!mPlatformProfile.Present || fw_hp_zx_profile_enabled() ||
         fw_compat_enabled(IA64_FW_COMPAT_SPARSE_SAL_MDT)) {
-        UINT64 pm_start = mPlatformProfile.Descriptor.AcpiPmBase;
-        UINT64 pm_size = mPlatformProfile.Descriptor.AcpiPmSize;
-
-        if (fw_hp_zx_profile_enabled() &&
-            fw_range_in_firmware_address_space(pm_start, pm_size)) {
-            efi_add_memory_range(
-                &index, EfiRuntimeServicesData,
-                FW_FIRMWARE_ADDRESS_SPACE_BASE, pm_start,
-                efi_memory_attribute(EfiRuntimeServicesData,
-                                     EFI_MEMORY_UC));
-            efi_add_memory_range(
-                &index, EfiMemoryMappedIO, pm_start, pm_start + pm_size,
-                EFI_MEMORY_UC | EFI_MEMORY_RUNTIME);
-            efi_add_memory_range(
-                &index, EfiRuntimeServicesData, pm_start + pm_size,
-                FW_FIRMWARE_ADDRESS_SPACE_END,
-                efi_memory_attribute(EfiRuntimeServicesData,
-                                     EFI_MEMORY_UC));
+        if (fw_hp_zx_profile_enabled()) {
+            efi_add_zx_firmware_ranges(&index);
         } else {
             efi_add_memory_range(
                 &index, EfiRuntimeServicesData,
@@ -14863,6 +14961,17 @@ static BOOLEAN efi_init_memory_map(void)
         efi_add_memory_range(&index, EfiMemoryMappedIO, IA64_UART_BASE,
                              IA64_UART_BASE + IA64_UART_MMIO_SIZE,
                              EFI_MEMORY_UC);
+    } else if (mPlatformProfile.Descriptor.UartCount != 0) {
+        for (i = 0; i < mPlatformProfile.Descriptor.UartCount; i++) {
+            UINT64 base = mPlatformProfile.Descriptor.Uart[i].Base;
+
+            if (!fw_range_in_firmware_address_space(
+                    base, IA64_PLATFORM_RESOURCE_ALIGNMENT)) {
+                efi_add_memory_range(&index, EfiMemoryMappedIO, base,
+                                     base + IA64_PLATFORM_RESOURCE_ALIGNMENT,
+                                     EFI_MEMORY_UC);
+            }
+        }
     } else {
         UINT64 console_base = fw_platform_console_base() & ~0xfffULL;
         UINT64 console_physical_end = fw_platform_console_base() +
@@ -15117,13 +15226,14 @@ static BOOLEAN smbios_build_type0(void)
 
 static BOOLEAN smbios_build_type1(void)
 {
-    static const CHAR8 * const Strings[] = {
-        "QEMU",
-        "IA-64 Virtual Platform",
+    BOOLEAN zx2000 = fw_hp_zx2000_profile_enabled();
+    const CHAR8 * const Strings[] = {
+        zx2000 ? "HP" : "QEMU",
+        zx2000 ? "HP zx2000" : "IA-64 Virtual Platform",
         "1.0",
         "0",
-        "IA64-VPC",
-        "Virtual Machine",
+        zx2000 ? "hp-zx2000" : "IA64-VPC",
+        zx2000 ? "HP Workstation" : "Virtual Machine",
     };
     SMBIOS_TYPE1_SYSTEM_INFORMATION T;
 
@@ -15142,9 +15252,10 @@ static BOOLEAN smbios_build_type1(void)
 
 static BOOLEAN smbios_build_type2(void)
 {
-    static const CHAR8 * const Strings[] = {
-        "QEMU",
-        "IA-64 Virtual Board",
+    BOOLEAN zx2000 = fw_hp_zx2000_profile_enabled();
+    const CHAR8 * const Strings[] = {
+        zx2000 ? "HP" : "QEMU",
+        zx2000 ? "HP zx2000" : "IA-64 Virtual Board",
         "1.0",
         "0",
         "0",
@@ -15170,19 +15281,20 @@ static BOOLEAN smbios_build_type2(void)
 
 static BOOLEAN smbios_build_type3(void)
 {
-    static const CHAR8 * const Strings[] = {
-        "QEMU",
+    BOOLEAN zx2000 = fw_hp_zx2000_profile_enabled();
+    const CHAR8 * const Strings[] = {
+        zx2000 ? "HP" : "QEMU",
         "1.0",
         "0",
         "0",
-        "IA64-VPC",
+        zx2000 ? "hp-zx2000" : "IA64-VPC",
     };
     SMBIOS_TYPE3_SYSTEM_ENCLOSURE T;
 
     fw_set_mem(&T, sizeof(T), 0);
     smbios_header_init(&T.Hdr, 3, sizeof(T), 0x0300);
     T.Manufacturer = 1;
-    T.ChassisType = 0x01;
+    T.ChassisType = zx2000 ? 0x06 : 0x01;
     T.Version = 2;
     T.SerialNumber = 3;
     T.AssetTag = 4;
@@ -15787,12 +15899,25 @@ static BOOLEAN efi_init_platform_tables(void)
         (debug_port_present ? 1U : 0U) + (spcr_present ? 1U : 0U);
     UINT32 xsdt_length = 36 + table_count * 8U;
     UINT32 rsdt_length = 36 + table_count * 4U;
+    FWAcpiRootMemoryWindow root_memory_windows[IA64_PLATFORM_MAX_UARTS];
+    UINTN root_memory_window_count = 0;
     UINTN dsdt_aml_length;
     UINT32 dsdt_length;
 
     (void)acpi_assign_reclaim_tables();
 
     mSalSystemTableValid = sal_build_system_table();
+
+    if (mPlatformProfile.Present) {
+        root_memory_window_count = mPlatformProfile.Descriptor.UartCount;
+        for (i = 0; i < root_memory_window_count; i++) {
+            const IA64PlatformUart *uart = &mPlatformProfile.Descriptor.Uart[i];
+
+            root_memory_windows[i].RootIndex = uart->RootIndex;
+            root_memory_windows[i].Base = uart->Base;
+            root_memory_windows[i].Size = IA64_PLATFORM_UART_REGISTER_COUNT;
+        }
+    }
 
     mFacs.Signature = EFI_SIGNATURE_32('F', 'A', 'C', 'S');
     mFacs.Length = sizeof(mFacs);
@@ -15823,6 +15948,9 @@ static BOOLEAN efi_init_platform_tables(void)
                    mPlatformProfile.PciRootCount,
                    mPlatformProfile.PciRoute,
                    mPlatformProfile.PciRouteCount,
+                   root_memory_windows,
+                   root_memory_window_count,
+                   mPlatformProfile.Descriptor.LegacyIoBase,
                    mPlatformProfile.Descriptor.AcpiPmBase,
                    mPlatformProfile.Descriptor.AcpiPmSize,
                    &dsdt_aml_length)) {
@@ -15840,7 +15968,7 @@ static BOOLEAN efi_init_platform_tables(void)
     mFadt.FirmwareCtrl = (UINT32)(UINTN)mAcpiFacs;
     mFadt.Dsdt = (UINT32)(UINTN)mAcpiDsdt;
     mFadt.Model = 0;
-    mFadt.PreferredProfile = 4;
+    mFadt.PreferredProfile = fw_hp_zx2000_profile_enabled() ? 3 : 4;
     mFadt.SciInterrupt = acpi_pm_present ? acpi_sci_irq : 0;
     mFadt.SmiCommand = 0;
     mFadt.AcpiEnable = 0;
@@ -15939,13 +16067,13 @@ static BOOLEAN efi_init_platform_tables(void)
 
     {
         static const UINT8 ps2_enabled_name[4] = { 'P', '2', 'E', 'N' };
-        static const UINT8 uart_enabled_name[4] = { 'U', '0', 'E', 'N' };
         static const CHAR8 zx_legacy_parent[4] = { 'S', 'B', 'A', '0' };
+        UINTN ssdt_aml_length = sizeof(mSsdtAmlTemplate);
 
-        fw_copy_mem(mSsdt.Aml, mSsdtAmlTemplate, sizeof(mSsdt.Aml));
+        fw_copy_mem(mSsdt.Aml, mSsdtAmlTemplate, ssdt_aml_length);
         if (hp_zx_profile &&
             !fw_acpi_ssdt_reparent_legacy_devices(
-                mSsdt.Aml, sizeof(mSsdt.Aml), zx_legacy_parent)) {
+                mSsdt.Aml, ssdt_aml_length, zx_legacy_parent)) {
             return 0;
         }
         for (i = 0; i < FW_MAX_CPUS; i++) {
@@ -15956,12 +16084,27 @@ static BOOLEAN efi_init_platform_tables(void)
         (void)acpi_ssdt_set_named_byte(
             &mSsdt, ps2_enabled_name,
             fw_handoff_i8042_enabled() && !i2000_profile ? 0x0fU : 0);
-        (void)acpi_ssdt_set_named_byte(
-            &mSsdt, uart_enabled_name, vpc_profile ? 0x0fU : 0);
+        if (vpc_profile) {
+            fw_copy_mem(mSsdt.Aml + ssdt_aml_length,
+                        mVpcUartAmlTemplate, sizeof(mVpcUartAmlTemplate));
+            ssdt_aml_length += sizeof(mVpcUartAmlTemplate);
+        } else if (root_memory_window_count != 0) {
+            UINTN uart_length;
+
+            if (!fw_acpi_build_uart_ssdt(
+                    mSsdt.Aml + ssdt_aml_length,
+                    sizeof(mSsdt.Aml) - ssdt_aml_length,
+                    mPlatformProfile.Descriptor.Uart,
+                    mPlatformProfile.Descriptor.UartCount,
+                    mPlatformProfile.PciRootCount, &uart_length)) {
+                return 0;
+            }
+            ssdt_aml_length += uart_length;
+        }
         init_sdt_header(&mSsdt.Hdr, EFI_SIGNATURE_32('S', 'S', 'D', 'T'),
-                        sizeof(mSsdt));
+                        sizeof(mSsdt.Hdr) + (UINT32)ssdt_aml_length);
         mSsdt.Hdr.Revision = 2;
-        mSsdt.Hdr.Checksum = table_checksum8(&mSsdt, sizeof(mSsdt));
+        mSsdt.Hdr.Checksum = table_checksum8(&mSsdt, mSsdt.Hdr.Length);
     }
 
     init_sdt_header(&mXsdt.Hdr, EFI_SIGNATURE_32('X', 'S', 'D', 'T'),
@@ -16151,8 +16294,7 @@ static BOOLEAN efi_init_platform_tables(void)
     mHcdp.Uart[0].PciFunction = 0;
     mHcdp.Uart[0].Baud = fw_platform_console_default_baud();
     /*
-     * VPC and i2000 publish a PNP0501 logical COM1 port.  Other HP profiles
-     * supply a CPU physical ConsoleBase and use a SystemMemory GAS.
+     * HP zx profiles supply a CPU physical ConsoleBase and use SystemMemory.
      */
     mHcdp.Uart[0].BaseAddress.SpaceId = i2000_profile ?
         i2000_uart->HcdpSpaceId :
@@ -16189,7 +16331,8 @@ static BOOLEAN efi_init_platform_tables(void)
     mHcdp.Uart[0].Flags = i2000_profile ?
         (i2000_uart->HcdpFlags &
          (UINT8)~(vga_primary ? HCDP_UART_FLAG_PRIMARY_CONSOLE : 0U)) :
-        (HCDP_UART_FLAG_EDGE_SENSITIVE | HCDP_UART_FLAG_INTERRUPT |
+        ((hp_zx_profile ? 0 :
+          HCDP_UART_FLAG_EDGE_SENSITIVE) | HCDP_UART_FLAG_INTERRUPT |
          (vga_primary ? 0 : HCDP_UART_FLAG_PRIMARY_CONSOLE));
     mHcdp.Uart[0].ConOutIndex = graphics_present ?
         HCDP_CONOUT_UART_INDEX :
@@ -18806,6 +18949,27 @@ static void ide_probe_primary_devices(void)
         uart_puts(ide_unit_name(dev));
         uart_puts("\r\n");
     }
+}
+
+static IDE_DEVICE *ide_select_boot_device(void)
+{
+    IDE_DEVICE *selected = NULL;
+    UINTN i;
+
+    for (i = 0; i < FW_ARRAY_SIZE(mIdeDevices); i++) {
+        IDE_DEVICE *device = &mIdeDevices[i];
+
+        if (!device->present) {
+            continue;
+        }
+        if (selected == NULL ||
+            (device->is_atapi &&
+             (!selected->is_atapi ||
+              (!selected->media_present && device->media_present)))) {
+            selected = device;
+        }
+    }
+    return selected;
 }
 
 static BOOLEAN ata_lba_range_valid(const IDE_DEVICE *dev, UINT64 lba,
@@ -24411,8 +24575,7 @@ static UINT32 fw_platform_pci_root_path_uid(UINTN RootIndex)
     return mPlatformProfile.Present &&
         mPlatformProfile.Descriptor.PciRootIdentity ==
             IA64_PLATFORM_PCI_ROOT_IDENTITY_HP_ZX ?
-        fw_acpi_hp_root_uid(&mPlatformProfile.PciRoot[RootIndex],
-                            RootIndex, mPlatformProfile.PciRootCount) :
+        fw_acpi_hp_root_uid(&mPlatformProfile.PciRoot[RootIndex]) :
         (UINT32)RootIndex;
 }
 
@@ -37994,11 +38157,7 @@ void firmware_main(UINT64 gp, UINT64 stack_top, UINT64 boot_b0)
 
         if (vpc_storage || i2000_ide || platform_ide) {
             ide_probe_primary_devices();
-            mBootIdeDevice = &mIdeDevices[0];
-            if (vpc_storage && !mBootIdeDevice->present &&
-                mIdeDevices[1].present) {
-                mBootIdeDevice = &mIdeDevices[1];
-            }
+            mBootIdeDevice = ide_select_boot_device();
         } else {
             mBootIdeDevice = NULL;
             mHardDiskIdeDevice = NULL;
@@ -38377,6 +38536,9 @@ void firmware_main(UINT64 gp, UINT64 stack_top, UINT64 boot_b0)
                   "(zx6000 LSI53C1030 Block I/O)\r\n");
     } else if (fw_i2000_ide_policy() != NULL) {
         uart_puts("LocateHandle:         enabled (i2000 IDE Block I/O)\r\n");
+    } else if (fw_hp_zx2000_profile_enabled()) {
+        uart_puts("LocateHandle:         enabled "
+                  "(zx2000 CMD649 Block I/O)\r\n");
     } else if (fw_platform_onboard_device(
                    IA64_PLATFORM_ONBOARD_IDE) != NULL ||
                fw_platform_onboard_device(
@@ -38433,6 +38595,9 @@ void firmware_main(UINT64 gp, UINT64 stack_top, UINT64 boot_b0)
                   "IDE optical + FAT resolver\r\n");
     } else if (fw_i2000_ide_policy() != NULL) {
         uart_puts("BOOT path:            i2000 primary-master PIO IDE + FAT resolver\r\n");
+    } else if (fw_hp_zx2000_profile_enabled()) {
+        uart_puts("BOOT path:            zx2000 CMD649 disk/optical + "
+                  "FAT resolver\r\n");
     } else if (fw_platform_onboard_device(
                    IA64_PLATFORM_ONBOARD_IDE) != NULL ||
                fw_platform_onboard_device(
