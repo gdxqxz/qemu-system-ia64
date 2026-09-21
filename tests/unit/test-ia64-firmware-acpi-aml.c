@@ -251,8 +251,8 @@ static BOOLEAN prt_integer(const UINT8 *aml, UINTN aml_size,
     UINT64 value;
 
     return aml_integer(aml, aml_size, offset, &value) && value == expected &&
-        (value > 1U ||
-         (aml[start] == (UINT8)value && *offset == start + 1U));
+        (value > 0xffU ||
+         (aml[start] == 0x0aU && *offset == start + 2U));
 }
 
 typedef struct AddressSpace {

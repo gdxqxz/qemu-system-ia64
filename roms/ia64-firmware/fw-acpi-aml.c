@@ -427,6 +427,25 @@ BOOLEAN fw_acpi_aml_integer(FWAcpiAmlBuilder *builder, UINT64 value)
     return 1;
 }
 
+/*
+ * Some older AML consumers reject ZeroOp and OneOp in _PRT packages.  Encode
+ * small values as ByteConst objects, matching the static i2000 DSDT.
+ */
+static BOOLEAN fw_aml_prt_integer(FWAcpiAmlBuilder *builder, UINT64 value)
+{
+    UINT8 *bytes;
+
+    if (value > 0xffU) {
+        return fw_acpi_aml_integer(builder, value);
+    }
+    if (!fw_aml_reserve(builder, 2U, &bytes)) {
+        return 0;
+    }
+    bytes[0] = FW_AML_BYTE_PREFIX;
+    bytes[1] = (UINT8)value;
+    return 1;
+}
+
 static BOOLEAN fw_aml_hex_digit(CHAR8 character, UINT8 *value)
 {
     if (character >= '0' && character <= '9') {
@@ -1247,10 +1266,10 @@ static BOOLEAN fw_aml_root_prt(FWAcpiAmlBuilder *builder,
         }
         address = ((UINT64)route->Device << 16) | 0xffffU;
         if (!fw_acpi_aml_package_begin(builder, 4) ||
-            !fw_acpi_aml_integer(builder, address) ||
-            !fw_acpi_aml_integer(builder, route->Pin) ||
-            !fw_acpi_aml_integer(builder, 0) ||
-            !fw_acpi_aml_integer(builder, route->Gsi) ||
+            !fw_aml_prt_integer(builder, address) ||
+            !fw_aml_prt_integer(builder, route->Pin) ||
+            !fw_aml_prt_integer(builder, 0) ||
+            !fw_aml_prt_integer(builder, route->Gsi) ||
             !fw_acpi_aml_package_end(builder)) {
             return 0;
         }
