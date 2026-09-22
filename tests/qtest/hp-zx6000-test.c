@@ -2233,7 +2233,8 @@ static void zx6000_assert_int10_rom(QTestState *qts)
     g_assert_cmphex(lduw_le_p(rom + ati_header + 0x48), ==,
                     ZX6000_INT10_ATI_MEM_CONFIG_OFFSET);
     expected_mem[0] = 3;
-    expected_mem[3] = 32;
+    expected_mem[2] = 1;
+    expected_mem[3] = 16;
     expected_mem[4] = 0x25;
     expected_mem[6] = 1;
     expected_mem[8] = 0xff;
@@ -3050,6 +3051,58 @@ static void test_hp_zx6000_int10(void)
     g_assert_cmpint(g_rmdir(tmpdir), ==, 0);
 }
 
+static void test_hp_zx6000_int10_vram(void)
+{
+    static const struct {
+        const char *machine;
+        uint64_t mmio;
+        uint32_t memory_mb;
+    } configurations[] = {
+        { "hp-zx2000", UINT64_C(0x88020000), 32 },
+        { "hp-zx6000", ZX6000_RV100_MMIO_BASE, 32 },
+        { "hp-rx2660", UINT64_C(0x88020000), 16 },
+        { "hp-rx2660", UINT64_C(0x88020000), 32 },
+        { "hp-rx2660", UINT64_C(0x88020000), 64 },
+        { "hp-rx2660", UINT64_C(0x88020000), 128 },
+    };
+
+    for (size_t i = 0; i < ARRAY_SIZE(configurations); i++) {
+        uint64_t mmio = configurations[i].mmio;
+        uint32_t memory_size = configurations[i].memory_mb * MiB;
+        QTestState *qts;
+
+        if (!qtest_has_machine(configurations[i].machine)) {
+            continue;
+        }
+        qts = qtest_initf(
+            "-machine %s,nvram=none,firmware=none -m 1G -S "
+            "-nodefaults -display none -serial none -monitor none "
+            "-net none -vga ati -global ati-vga.vgamem_mb=%u",
+            configurations[i].machine, configurations[i].memory_mb);
+
+        for (unsigned reset = 0; reset < 2; reset++) {
+            uint16_t header, table;
+            uint32_t decoded_size;
+
+            if (reset) {
+                qtest_system_reset(qts);
+            }
+            header = qtest_readw(qts, ZX6000_INT10_ROM_BASE + 0x48);
+            table = qtest_readw(qts, ZX6000_INT10_ROM_BASE + header + 0x48);
+            g_assert_cmpuint(table, >, 0);
+            g_assert_cmpuint(table, <, ZX6000_INT10_ROM_SIZE);
+            g_assert_cmpuint(qtest_readb(qts, ZX6000_INT10_ROM_BASE +
+                                         table - 1), ==, 1);
+            decoded_size = qtest_readb(qts, ZX6000_INT10_ROM_BASE + table) *
+                           (2 * MiB);
+            g_assert_cmpuint(decoded_size, ==, memory_size);
+            g_assert_cmpuint(qtest_readl(qts, mmio + CNFG_MEMSIZE), ==,
+                             decoded_size);
+        }
+        qtest_quit(qts);
+    }
+}
+
 static void test_hp_zx6000_default_usb_input(void)
 {
     QTestState *qts = zx6000_start_with_options("", "");
@@ -3288,6 +3341,7 @@ int main(int argc, char **argv)
     qtest_add_func("/hp-zx6000/vga-legacy-io",
                    test_hp_zx6000_vga_legacy_io);
     qtest_add_func("/hp-zx6000/int10", test_hp_zx6000_int10);
+    qtest_add_func("/hp-zx6000/int10-vram", test_hp_zx6000_int10_vram);
     qtest_add_func("/hp-zx6000/custom-vga-rom", test_hp_zx6000_custom_vga_rom);
     qtest_add_func("/hp-zx6000/default-usb-input",
                    test_hp_zx6000_default_usb_input);

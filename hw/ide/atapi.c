@@ -25,6 +25,7 @@
 
 #include "qemu/osdep.h"
 #include "qemu/cutils.h"
+#include "qemu/timer.h"
 #include "hw/scsi/scsi.h"
 #include "system/block-backend.h"
 #include "scsi/constants.h"
@@ -33,6 +34,9 @@
 
 #define ATAPI_SECTOR_BITS (2 + BDRV_SECTOR_BITS)
 #define ATAPI_SECTOR_SIZE (1 << ATAPI_SECTOR_BITS)
+
+/* Modeled processing delay, not an ATA/ATAPI timing requirement. */
+#define ATAPI_DMA_COMPLETE_DELAY_NS (NANOSECONDS_PER_SECOND / 1000)
 
 static void ide_atapi_cmd_read_dma_cb(void *opaque, int ret);
 
@@ -174,10 +178,31 @@ static int cd_read_sector(IDEState *s)
     return 0;
 }
 
-static void ide_atapi_cmd_complete(IDEState *s)
+void ide_atapi_cmd_complete_timer(void *opaque)
 {
+    IDEState *s = opaque;
+
+    s->status &= ~BUSY_STAT;
     ide_transfer_stop(s);
     ide_bus_set_irq(s->bus);
+}
+
+static void ide_atapi_cmd_complete(IDEState *s)
+{
+    if (s->atapi_dma) {
+        /*
+         * Expose the BSY phase of PACKET DMA (ATA/ATAPI-6, 9.8, DPD2).
+         * Complete errors and non-data commands even if the host never
+         * starts bus-master DMA.
+         */
+        s->status |= BUSY_STAT;
+        timer_mod(s->atapi_complete_timer,
+                  qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL) +
+                  ATAPI_DMA_COMPLETE_DELAY_NS);
+    } else {
+        ide_transfer_stop(s);
+        ide_bus_set_irq(s->bus);
+    }
 }
 
 void ide_atapi_cmd_ok(IDEState *s)

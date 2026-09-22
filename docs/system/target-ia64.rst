@@ -125,6 +125,9 @@ firmware.  Its two PDH 16550 UARTs are at
 ``0xff5e0000`` and ``0xff5e2000``.  FM801 audio, its gameport and BMC
 services are not emulated.  No onboard SCSI controller is instantiated.
 
+EFI PCI root device paths use expanded ACPI nodes with ``PNP0A03`` as
+the compatible ID.
+
 HP zx6000 device layout
 -----------------------
 
@@ -205,8 +208,9 @@ Graphics coverage
 The ATI models support high-color/true-color scanout and VBE modes.
 The HP bridge supplies matching ATI COMBIOS metadata in the legacy ROM shadow
 and the default PCI option ROM, and initializes the default Radeon memory and
-system clocks consistently with those tables.  Explicitly supplied option ROMs
-are preserved.  Radeon CRT detection and DDC/EDID are implemented.
+system clocks and CRT connection flags consistently with those tables.
+Explicitly supplied option ROMs are preserved.  Radeon CRT detection and
+DDC/EDID are implemented.
 The Radeon command processor handles rectangle fills and copies, transparent
 copies, connected lines, scanline spans, clipping, character bitmaps and
 indexed host bitmap uploads, including the setup-only packets used before

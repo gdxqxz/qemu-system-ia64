@@ -592,7 +592,9 @@ void ide_transfer_start(IDEState *s, uint8_t *buf, int size,
 
 static void ide_cmd_done(IDEState *s)
 {
-    if (s->bus->dma->ops->cmd_done) {
+    /* ATAPI DMA cleanup may precede its delayed command completion. */
+    if (s->bus->dma->ops->cmd_done &&
+        !timer_pending(s->atapi_complete_timer)) {
         s->bus->dma->ops->cmd_done(s->bus->dma);
     }
 }
@@ -1349,6 +1351,8 @@ void ide_ioport_write(void *opaque, uint32_t addr, uint32_t val)
 static void ide_reset(IDEState *s)
 {
     trace_ide_reset(s);
+
+    timer_del(s->atapi_complete_timer);
 
     if (s->pio_aiocb) {
         blk_aio_cancel(s->pio_aiocb);
@@ -2687,6 +2691,8 @@ static void ide_init1(IDEBus *bus, int unit)
 
     s->sector_write_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
                                            ide_sector_write_timer_cb, s);
+    s->atapi_complete_timer = timer_new_ns(QEMU_CLOCK_VIRTUAL,
+                                         ide_atapi_cmd_complete_timer, s);
 }
 
 static int ide_nop_int(const IDEDMA *dma, bool is_write)
@@ -2816,6 +2822,7 @@ void ide_bus_set_irq(IDEBus *bus)
 
 void ide_exit(IDEState *s)
 {
+    timer_free(s->atapi_complete_timer);
     timer_free(s->sector_write_timer);
     qemu_vfree(s->smart_selftest_data);
     qemu_vfree(s->io_buffer);

@@ -1266,7 +1266,7 @@ static bool hp_int10_default_radeon(PCIDevice *vga)
          device == HP_INT10_ATI_ES1000_DEVICE_ID);
 }
 
-static void hp_int10_post_ati_clocks(PCIDevice *vga)
+static void hp_int10_post_ati(PCIDevice *vga)
 {
     ATIVGAState *ati;
     uint32_t clock, feedback;
@@ -1276,6 +1276,9 @@ static void hp_int10_post_ati_clocks(PCIDevice *vga)
     }
     ati = ATI_VGA(vga);
     clock = ati->dev_id == HP_INT10_ATI_ES1000_DEVICE_ID ? 20000 : 16600;
+
+    /* Match the primary CRT advertised by the COMBIOS connector table. */
+    ati_mmio_write(ati, BIOS_4_SCRATCH, BIOS_4_SCRATCH_CRT1, 4);
 
     /*
      * The bridge initializes the memory and system clocks described by its
@@ -1323,8 +1326,7 @@ static void hp_int10_install_ati_bios_info(uint8_t *rom, PCIDevice *vga,
     bool rage128 = device == HP_INT10_ATI_RAGE128_DEVICE_ID;
     bool es1000 = device == HP_INT10_ATI_ES1000_DEVICE_ID;
     uint32_t memory_mb = MIN(memory_size / MiB, 256U);
-    uint32_t memory_step = memory_mb > UINT8_MAX ? 2 : 1;
-    uint32_t memory_units = memory_mb / memory_step;
+    uint32_t memory_units = memory_mb / 2;
     uint16_t clock_divider = hp_int10_default_radeon(vga) ?
         HP_INT10_ATI_CLOCK_REF_DIV : 12;
 
@@ -1332,7 +1334,7 @@ static void hp_int10_install_ati_bios_info(uint8_t *rom, PCIDevice *vga,
         return;
     }
     g_assert(memory_size % MiB == 0);
-    g_assert(memory_mb != 0 && memory_mb % memory_step == 0);
+    g_assert(memory_mb != 0 && memory_mb % 2 == 0);
     g_assert(memory_units != 0 && memory_units <= UINT8_MAX);
 
     memcpy(rom + HP_INT10_ROM_ATI_SIGNATURE,
@@ -1373,12 +1375,11 @@ static void hp_int10_install_ati_bios_info(uint8_t *rom, PCIDevice *vga,
 
     rom[HP_INT10_ROM_ATI_MEM_CONFIG - 3] =
         HP_INT10_ROM_ATI_MEM_RESET_OFFSET;
-    rom[HP_INT10_ROM_ATI_MEM_CONFIG - 2] =
-        memory_step == 1 ? 0 : memory_step;
-    rom[HP_INT10_ROM_ATI_MEM_CONFIG - 1] = 0;
+    rom[HP_INT10_ROM_ATI_MEM_CONFIG - 2] = 0;
+    /* Revision 1 expresses memory size in 2 MiB units. */
+    rom[HP_INT10_ROM_ATI_MEM_CONFIG - 1] = 1;
     rom[HP_INT10_ROM_ATI_MEM_CONFIG] = (uint8_t)memory_units;
-    rom[HP_INT10_ROM_ATI_MEM_CONFIG + 1] =
-        memory_step == 1 ? 0x25 : 0x2d;
+    rom[HP_INT10_ROM_ATI_MEM_CONFIG + 1] = 0x25;
     rom[HP_INT10_ROM_ATI_MEM_CONFIG + 2] = 0;
     rom[HP_INT10_ROM_ATI_MEM_CONFIG + 3] = 1;
     rom[HP_INT10_ROM_ATI_MEM_CONFIG + 4] = 0;
@@ -1635,7 +1636,7 @@ void hp_ia64_int10_reset(HPIA64Int10 *s)
     s->dpms_state = 0;
     s->legacy_mode = 3;
     s->legacy_columns = 80;
-    hp_int10_post_ati_clocks(s->vga);
+    hp_int10_post_ati(s->vga);
     hp_int10_install_rom(s);
 }
 

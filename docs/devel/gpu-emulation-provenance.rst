@@ -16,8 +16,8 @@ The following sources were used as technical references:
   `include/video/radeon.h <https://github.com/torvalds/linux/blob/master/include/video/radeon.h>`__,
   `drivers/gpu/drm/radeon/radeon_reg.h <https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/radeon_reg.h>`__
   for register and command-packet definitions,
-  `radeon_combios.c <https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/radeon_combios.c>`__
-  for legacy BIOS clock-table layout,
+  `radeon_combios.c (Linux v6.12) <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/radeon/radeon_combios.c>`__
+  for legacy BIOS clock-table layout and memory-table decoding,
   `radeon_legacy_encoders.c <https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/radeon_legacy_encoders.c>`__
   for primary-DAC load detection, and
   `radeon_legacy_crtc.c <https://github.com/torvalds/linux/blob/master/drivers/gpu/drm/radeon/radeon_legacy_crtc.c>`__
@@ -32,6 +32,11 @@ The following sources were used as technical references:
   for ATI Radeon R100 command sequences.
 * `Mesa <https://gitlab.freedesktop.org/mesa/mesa>`__ for ATI Radeon R100
   rendering and texture behavior.
+* XFree86's legacy ``RADEONGetBIOSParameters()`` in the
+  `NetBSD 1.6 xsrc mirror
+  <https://github.com/NetBSD/xsrc/blob/netbsd-1-6/xfree/xc/programs/Xserver/hw/xfree86/drivers/ati/radeon_driver.c>`__
+  for the BIOS scratch register 4 monitor-presence flags supplied by the
+  HP INT 10h bridge.  The file carries an MIT-style permission notice.
 
 ATI 2D and display references
 -----------------------------

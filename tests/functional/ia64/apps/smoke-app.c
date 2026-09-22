@@ -7,6 +7,36 @@ static UINT8 device_path_guid[16] = IA64_GUID_DEVICE_PATH;
 static UINT8 pci_root_guid[16] = IA64_GUID_PCI_ROOT_IO;
 static UINT8 pci_io_guid[16] = IA64_GUID_PCI_IO;
 
+static VOID print_device_path(IA64_TEST_CONTEXT *Context, const UINT8 *Path)
+{
+    static const char digits[] = "0123456789abcdef";
+    char text[513];
+    UINTN offset = 0;
+    UINTN i;
+
+    while (offset + 4U <= sizeof(text) / 2U) {
+        UINTN length = Path[offset + 2U] |
+            ((UINTN)Path[offset + 3U] << 8);
+        BOOLEAN end = Path[offset] == 0x7f && Path[offset + 1U] == 0xff;
+
+        if (length < 4U || length > sizeof(text) / 2U - offset) {
+            return;
+        }
+        for (i = offset; i < offset + length; i++) {
+            text[2U * i] = digits[Path[i] >> 4];
+            text[2U * i + 1U] = digits[Path[i] & 0xf];
+        }
+        offset += length;
+        if (end) {
+            text[2U * offset] = 0;
+            ia64_test_write(Context, "EFI boot device path: ");
+            ia64_test_write(Context, text);
+            ia64_test_write(Context, "\n");
+            return;
+        }
+    }
+}
+
 static BOOLEAN storage_node_valid(EFI_SYSTEM_TABLE *SystemTable,
                                   EFI_HANDLE Controller, const UINT8 *Node)
 {
@@ -340,6 +370,9 @@ EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *SystemTable)
     ia64_test_check(&context, "device-path",
                     status == EFI_SUCCESS && device_path != NULL,
                     status, "device-path-protocol");
+    if (status == EFI_SUCCESS && device_path != NULL) {
+        print_device_path(&context, device_path);
+    }
 
     remaining = device_path;
     if (remaining != NULL &&

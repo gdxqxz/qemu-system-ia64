@@ -1832,6 +1832,24 @@ static void ati_register_endian(void)
                 g_assert_cmphex(qtest_readl(qts, other + ATI_CLOCK_CNTL_DATA),
                                 ==, other_swap ? bswap32(value) : value);
 
+                /* A read followed by a write still requires PLL_WR_EN. */
+                qtest_writel(qts, mmio + ATI_CLOCK_CNTL_INDEX,
+                             swap ? bswap32(ATI_PPLL_DIV_3) : ATI_PPLL_DIV_3);
+                g_assert_cmphex(qtest_readl(qts, mmio + ATI_CLOCK_CNTL_DATA),
+                                ==, swap ? bswap32(value) : value);
+                qtest_writel(qts, mmio + ATI_CLOCK_CNTL_DATA, UINT32_MAX);
+                qtest_writel(qts, mmio + ATI_MM_INDEX,
+                             swap ? bswap32(ATI_CLOCK_CNTL_DATA) :
+                                    ATI_CLOCK_CNTL_DATA);
+                qtest_writel(qts, mmio + ATI_MM_DATA, UINT32_MAX);
+                g_assert_cmphex(qtest_readl(qts, other + ATI_CLOCK_CNTL_DATA),
+                                ==, other_swap ? bswap32(value) : value);
+                g_assert_cmphex(qtest_readl(qts, mmio + ATI_CLOCK_CNTL_INDEX),
+                                ==, swap ? bswap32(ATI_PPLL_DIV_3) :
+                                           ATI_PPLL_DIV_3);
+                qtest_writeb(qts, mmio + ATI_CLOCK_CNTL_INDEX +
+                                   (swap ? 3 : 0), index);
+
                 qtest_writew(qts, mmio + ATI_CLOCK_CNTL_DATA + (swap ? 2 : 0),
                              swap ? bswap16(0x2abb) : 0x2abb);
                 qtest_writeb(qts, mmio + ATI_CLOCK_CNTL_DATA + (swap ? 0 : 3),

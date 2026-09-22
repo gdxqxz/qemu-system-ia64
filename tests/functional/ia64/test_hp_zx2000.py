@@ -112,13 +112,23 @@ class HPZx2000Boot(QemuSystemTest):
         vm.launch()
         return vm
 
-    def assert_smoke(self, vm):
+    def assert_smoke(self, vm, unit=0):
         result = wait_for_suite(
             vm.console_socket, "smoke", SMOKE_CASES, 40.0,
             process_alive=vm.is_running,
         )
         self.assertEqual(result.failed, 0)
         self.assertTrue(vm.is_running(), "QEMU exited after EFI boot")
+        match = re.search(r"EFI boot device path: ([0-9a-f]+)",
+                          result.raw_console)
+        self.assertIsNotNone(match, "EFI app did not report its boot path")
+        path = bytes.fromhex(match[1])
+        # Check the expanded ACPI root, PCI IDE controller and ATA unit.
+        prefix = (struct.pack("<BBHIII3x", 2, 2, 19, 0x000222F0, 0x500,
+                              0x0A0341D0) +
+                  struct.pack("<BBHBB", 1, 1, 6, 0, 2) +
+                  struct.pack("<BBHBBH", 3, 1, 8, 0, unit, 0))
+        self.assertEqual(path[:len(prefix)], prefix)
 
     def test_firmware_ready(self):
         vm = self.launch_machine("-vga", "ati")
@@ -149,6 +159,19 @@ class HPZx2000Boot(QemuSystemTest):
         )
         self.assert_smoke(vm)
 
+    def test_disk_slave_boot_with_optical_master(self):
+        disk = Path(self.scratch_file("disk.img"))
+        make_fat_disk(disk, app_path("smoke"), layout="gpt")
+        optical = Path(self.scratch_file("empty-optical.iso"))
+        with optical.open("wb") as stream:
+            stream.truncate(1024 * 1024)
+        vm = self.launch_machine(
+            "-drive", f"file={optical},format=raw,media=cdrom,readonly=on",
+            "-drive", f"file={disk},format=raw",
+            "-vga", "none",
+        )
+        self.assert_smoke(vm, unit=1)
+
     def optical_boot_with_disk(self, optical_unit):
         disk = Path(self.scratch_file("empty-disk.img"))
         with disk.open("wb") as stream:
@@ -160,7 +183,7 @@ class HPZx2000Boot(QemuSystemTest):
             "-drive", f"file={optical},format=raw,media=cdrom,readonly=on,"
                       f"index={optical_unit}",
         )
-        self.assert_smoke(vm)
+        self.assert_smoke(vm, unit=optical_unit)
 
     def test_disk_master_optical_slave_boot(self):
         self.optical_boot_with_disk(1)

@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 
 #include "hw/acpi/acpi.h"
+#include "hw/display/ati_regs.h"
 #include "hw/ia64/ia64_platform_abi.h"
 #include "hw/pci/pci.h"
 #include "hw/pci-host/hp-zx1-ioa-regs.h"
@@ -22,6 +23,7 @@
 #define ZX2000_SPARSE_IO_BASE UINT64_C(0x00000ffffc000000)
 #define ZX2000_ACPI_PM_BASE   UINT64_C(0xff5c0000)
 #define ZX2000_UART_BASE      UINT64_C(0xff5e0000)
+#define ZX2000_RV100_MMIO_BASE UINT64_C(0x88020000)
 #define UART_IER              1U
 #define UART_SCR              7U
 #define UART_IER_THRI         2U
@@ -424,6 +426,11 @@ static void test_hp_zx2000_int10(void)
         if (reset) {
             qtest_system_reset(qts);
         }
+        g_assert_cmphex(qtest_readl(qts, ZX2000_RV100_MMIO_BASE +
+                                    BIOS_4_SCRATCH), ==,
+                        BIOS_4_SCRATCH_CRT1);
+        /* The next reset must repeat firmware POST after a guest write. */
+        qtest_writel(qts, ZX2000_RV100_MMIO_BASE + BIOS_4_SCRATCH, 0);
         qtest_writew(qts, ax, 0x4f00);
         qtest_writew(qts, execute, 0x4941);
         g_assert_cmphex(qtest_readw(qts, ax), ==, 0x004f);
@@ -432,6 +439,39 @@ static void test_hp_zx2000_int10(void)
             stw_le_p(response + word * 2, qtest_readw(qts, data));
         }
         g_assert_cmpmem(response, 4, "VESA", 4);
+    }
+    qtest_quit(qts);
+}
+
+static void test_hp_zx2000_pll_write_enable(void)
+{
+    const uint64_t mmio = ZX2000_RV100_MMIO_BASE;
+    QTestState *qts = zx2000_start("-nodefaults -vga ati");
+
+    for (unsigned swap = 0; swap < 2; swap++) {
+        uint32_t index = PLL_DIV_SEL_MASK | PPLL_REF_DIV;
+        uint32_t original;
+
+        qtest_system_reset(qts);
+        if (swap) {
+            qtest_writel(qts, mmio + CNFG_CNTL,
+                         R100_APER_REG_ENDIAN_0 << R100_APER_REG_ENDIAN_SHIFT);
+        }
+        qtest_writel(qts, mmio + CLOCK_CNTL_INDEX,
+                     swap ? bswap32(index) : index);
+        original = qtest_readl(qts, mmio + CLOCK_CNTL_DATA);
+        qtest_writel(qts, mmio + CLOCK_CNTL_DATA,
+                     original ^ (swap ? bswap32(1) : 1));
+        g_assert_cmphex(qtest_readl(qts, mmio + CLOCK_CNTL_DATA), ==, original);
+        g_assert_cmphex(qtest_readl(qts, mmio + CLOCK_CNTL_INDEX), ==,
+                        swap ? bswap32(index) : index);
+
+        index |= PLL_WR_EN;
+        qtest_writel(qts, mmio + CLOCK_CNTL_INDEX,
+                     swap ? bswap32(index) : index);
+        qtest_writel(qts, mmio + CLOCK_CNTL_DATA, swap ? bswap32(60) : 60);
+        g_assert_cmphex(qtest_readl(qts, mmio + CLOCK_CNTL_DATA), ==,
+                        swap ? bswap32(60) : 60);
     }
     qtest_quit(qts);
 }
@@ -533,6 +573,8 @@ int main(int argc, char **argv)
     qtest_add_func("/hp-zx2000/storage-defaults",
                    test_hp_zx2000_storage_defaults);
     qtest_add_func("/hp-zx2000/int10", test_hp_zx2000_int10);
+    qtest_add_func("/hp-zx2000/pll-write-enable",
+                   test_hp_zx2000_pll_write_enable);
     qtest_add_func("/hp-zx2000/pdh", test_hp_zx2000_pdh);
     return g_test_run();
 }

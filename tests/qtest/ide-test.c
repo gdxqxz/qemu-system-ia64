@@ -899,7 +899,7 @@ static void nsleep(QTestState *qts, int64_t nsecs)
 {
     const struct timespec val = { .tv_nsec = nsecs };
     nanosleep(&val, NULL);
-    qtest_clock_set(qts, nsecs);
+    qtest_clock_step(qts, nsecs);
 }
 
 static uint8_t ide_wait_clear(QTestState *qts, uint8_t flag)
