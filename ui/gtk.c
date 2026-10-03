@@ -457,6 +457,12 @@ static void gd_mouse_set(DisplayChangeListener *dcl,
     }
 
     dpy = gtk_widget_get_display(vc->gfx.drawing_area);
+#ifdef GDK_WINDOWING_WAYLAND
+    if (GDK_IS_WAYLAND_DISPLAY(dpy)) {
+        /* GDK cannot warp the Wayland pointer; keep the motion baseline. */
+        return;
+    }
+#endif
     gdk_window_get_root_coords(gtk_widget_get_window(vc->gfx.drawing_area),
                                x, y, &x_root, &y_root);
     gdk_device_warp(gd_get_pointer(dpy),
@@ -1039,12 +1045,24 @@ static gboolean gd_motion_event(GtkWidget *widget, GdkEventMotion *motion,
     if (!qemu_input_is_absolute(vc->gfx.dcl.con) && s->ptr_owner == vc) {
         GdkScreen *screen = gtk_widget_get_screen(vc->gfx.drawing_area);
         GdkDisplay *dpy = gtk_widget_get_display(widget);
-        GdkWindow *win = gtk_widget_get_window(widget);
-        GdkMonitor *monitor = gdk_display_get_monitor_at_window(dpy, win);
+        GdkWindow *win;
+        GdkMonitor *monitor;
         GdkRectangle geometry;
-
         int xr = (int)motion->x_root;
         int yr = (int)motion->y_root;
+
+#ifdef GDK_WINDOWING_WAYLAND
+        /*
+         * GDK's Wayland backend has no global pointer coordinates or warp.
+         * Skip edge recentering so a failed warp cannot reset last_set and
+         * discard subsequent relative motion.
+         */
+        if (GDK_IS_WAYLAND_DISPLAY(dpy)) {
+            return TRUE;
+        }
+#endif
+        win = gtk_widget_get_window(widget);
+        monitor = gdk_display_get_monitor_at_window(dpy, win);
 
         gdk_monitor_get_geometry(monitor, &geometry);
 
